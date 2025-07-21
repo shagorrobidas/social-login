@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     # My apps
     'a_home',
     'a_users',
+    'chatbot',
     
     # Third party
     'django_browser_reload',
@@ -101,6 +102,7 @@ MIDDLEWARE = [
 ]
 if DEBUG:
     MIDDLEWARE += ['django_browser_reload.middleware.BrowserReloadMiddleware']
+
 
 
 AUTHENTICATION_BACKENDS = [
@@ -198,3 +200,6 @@ SOCIALACCOUNT_EMAIL_VERIFICATION = "none"
 
 ACCOUNT_ADAPTER = "a_users.adapters.CustomAccountAdapter"
 SOCIALACCOUNT_ADAPTER = "a_users.adapters.SocialAccountAdapter"
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
