@@ -10,60 +10,71 @@ from langchain.chains.question_answering import load_qa_chain
 import os
 from django.utils import timezone
 from django.conf import settings
+from .models import ChatSession, ChatMessage
+from django.contrib.auth.mixins import LoginRequiredMixin
 
 settings.GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
-class ChatbotView(TemplateView):
+class ChatbotView(TemplateView, LoginRequiredMixin):
     template_name = "chatbot.html"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['theme'] = self.request.GET.get('theme', 'Dark')
-        context['file_uploaded'] = bool(
-            self.request.session.get('faiss_index_path')
-        )
-        context['uploaded_filename'] = self.request.session.get(
-            'original_filename', ''
-        )
-        context['chat_history'] = self.request.session.get('chat_history', [])
+        context['file_uploaded'] = bool(self.request.session.get('faiss_index_path'))
+        context['uploaded_filename'] = self.request.session.get('original_filename', '')
+
+        chat_session_id = self.request.session.get('chat_session_id')
+        if chat_session_id:
+            context['chat_history'] = ChatMessage.objects.filter(
+                session_id=chat_session_id
+            ).order_by('created_at')
+        else:
+            context['chat_history'] = []
+
         return context
 
     def post(self, request):
         context = self.get_context_data()
-
         try:
             if 'pdf_file' in request.FILES:
-                self._handle_file_upload(request)  # no threading
-
+                self._handle_file_upload(request)
                 context['file_uploaded'] = True
                 context['uploaded_filename'] = request.session.get('original_filename', '')
-                if 'chat_history' in request.session:
-                    del request.session['chat_history']
+                request.session['chat_session_id'] = None  # reset session on new file
                 request.session.modified = True
 
             if 'user_query' in request.POST:
-                chat_history = request.session.get('chat_history', [])
                 user_query = request.POST['user_query']
 
-                chat_history.append({
-                    'sender': 'user',
-                    'message': user_query,
-                    'time': timezone.now().strftime("%H:%M")
-                })
-                request.session['chat_history'] = chat_history
-                request.session.modified = True
+                # Get or create ChatSession
+                session_key = request.session.session_key or request.session.save()
+                chat_session, created = ChatSession.objects.get_or_create(
+                    session_key=session_key,
+                    pdf_file=request.session.get('original_filename', 'unknown.pdf'),
+                    defaults={'user': request.user if request.user.is_authenticated else None}
+                )
+                request.session['chat_session_id'] = chat_session.id
 
+                # Save user message
+                ChatMessage.objects.create(
+                    session=chat_session,
+                    sender='user',
+                    message=user_query
+                )
+
+                # Get bot response
                 bot_response = self._handle_user_query(request)
 
-                chat_history = request.session.get('chat_history', [])
-                chat_history.append({
-                    'sender': 'bot',
-                    'message': bot_response,
-                    'time': timezone.now().strftime("%H:%M")
-                })
-                request.session['chat_history'] = chat_history
-                context['chat_history'] = chat_history
+                # Save bot message
+                ChatMessage.objects.create(
+                    session=chat_session,
+                    sender='bot',
+                    message=bot_response
+                )
+
+                context['chat_history'] = ChatMessage.objects.filter(session=chat_session)
 
         except Exception as e:
             context['error'] = str(e)
